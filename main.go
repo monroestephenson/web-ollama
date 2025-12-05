@@ -38,10 +38,12 @@ func main() {
 
 	// Initialize components
 	historyMgr := history.NewManager(cfg.HistoryPath, cfg.MaxHistorySize)
-	queryAnalyzer := analyzer.NewAnalyzer()
 	searxngClient := searxng.NewClient(cfg.SearXNGURL, cfg.SearchTimeout)
 	webCrawler := crawler.NewCrawler(cfg.CrawlTimeout, cfg.MaxCrawlers, cfg.MaxContentSize, cfg.UserAgent)
 	ollamaClient := ollama.NewClient(cfg.OllamaURL, cfg.OllamaTimeout)
+
+	// LLM-based query analyzer (uses same model)
+	llmAnalyzer := analyzer.NewLLMAnalyzer(ollamaClient, cfg.ModelName)
 
 	// Health checks
 	if err := ollamaClient.HealthCheck(); err != nil {
@@ -122,19 +124,29 @@ func main() {
 		// DON'T save user message yet - wait until after LLM response
 		// to avoid duplicate query in context
 
-		// Analyze query for search trigger
+		// Analyze query for search trigger using LLM
 		var searchContext string
 		var sourceURLs []string
 
 		if cfg.AutoSearch {
-			trigger := queryAnalyzer.AnalyzeQuery(query)
-
-			if cfg.Verbose {
-				display.PrintInfo(fmt.Sprintf("Search analysis: score=%d, reason=%s", trigger.Confidence, trigger.Reason))
-			}
-
-			if trigger.NeedsSearch {
-				searchContext, sourceURLs = performSearch(ctx, display, searxngClient, webCrawler, query, cfg)
+			display.PrintInfo("Analyzing query...")
+			decision, err := llmAnalyzer.AnalyzeWithLLM(ctx, query)
+			if err != nil {
+				display.PrintWarning(fmt.Sprintf("Analysis failed: %v", err))
+			} else {
+				if decision.NeedsSearch {
+					// Use the LLM's optimized search query
+					searchQuery := decision.SearchQuery
+					if searchQuery == "" {
+						searchQuery = query // Fallback to original
+					}
+					if cfg.Verbose {
+						display.PrintInfo(fmt.Sprintf("Search query: \"%s\" (Reason: %s)", searchQuery, decision.Reason))
+					}
+					searchContext, sourceURLs = performSearch(ctx, display, searxngClient, webCrawler, searchQuery, cfg)
+				} else if cfg.Verbose {
+					display.PrintInfo(fmt.Sprintf("No search needed: %s", decision.Reason))
+				}
 			}
 		}
 

@@ -30,6 +30,62 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 	}
 }
 
+// ChatSync sends a non-streaming chat request and returns the complete response
+func (c *Client) ChatSync(ctx context.Context, model string, msgs interface{}) (string, error) {
+	// Convert msgs to []Message
+	var messages []Message
+	switch v := msgs.(type) {
+	case []Message:
+		messages = v
+	default:
+		// Generic conversion - marshal and unmarshal
+		data, _ := json.Marshal(msgs)
+		json.Unmarshal(data, &messages)
+	}
+	req := ChatRequest{
+		Model:    model,
+		Messages: messages,
+		Stream:   false,
+	}
+
+	// Marshal request to JSON
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Create HTTP request
+	url := fmt.Sprintf("%s/api/chat", c.baseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set headers
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Execute request
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check status code
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("Ollama returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var chatResp ChatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return chatResp.Message.Content, nil
+}
+
 // Chat sends a chat request and streams the response
 func (c *Client) Chat(ctx context.Context, req ChatRequest, onChunk func(string)) (string, error) {
 	// Force streaming
