@@ -144,11 +144,7 @@ The binary is about 22MB and includes everything needed to run.
 
 ## Why I built this
 
-I wanted to use Ollama with web browsing but all existing solutions either:
-- Required external API keys
-- Didn't work with local search engines
-- Were overly complex
-- Didn't support reasoning models properly
+I wanted to use Ollama with web browsing but there was nothing that was CLI based using Ollama.
 
 This tool keeps everything local and simple. Your data stays on your machine.
 
