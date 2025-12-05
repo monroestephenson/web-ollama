@@ -17,27 +17,15 @@ import (
 	"web-ollama/internal/ollama"
 	"web-ollama/internal/searxng"
 	"web-ollama/internal/terminal"
+	"web-ollama/internal/ui"
 )
 
 func main() {
-	// Check if --classic flag is provided for old UI
-	useClassic := false
-	for _, arg := range os.Args[1:] {
-		if arg == "--classic" {
-			useClassic = true
-			break
-		}
-	}
-
-	if !useClassic {
-		// Use enhanced UI by default
-		mainEnhanced()
-		return
-	}
-
-	// Classic UI below
+	// Set the GetEnv function for config
 	config.GetEnv = os.Getenv
-	cfg := parseFlags()
+
+	// Parse command-line flags
+	cfg, showThinking := parseFlags()
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -45,9 +33,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize display
-	display := terminal.NewDisplay()
-	defer display.Cleanup()
+	// Initialize enhanced display
+	display := ui.NewEnhancedDisplay(showThinking)
 
 	// Initialize components
 	historyMgr := history.NewManager(cfg.HistoryPath, cfg.MaxHistorySize)
@@ -90,7 +77,6 @@ func main() {
 		<-sigChan
 		display.PrintInfo("\nShutting down gracefully...")
 		cancel()
-		display.Cleanup()
 		os.Exit(0)
 	}()
 
@@ -99,6 +85,10 @@ func main() {
 
 	// Main conversation loop
 	for {
+		// Show recent history
+		recentMessages := historyMgr.GetRecentMessages(10)
+		display.DrawHistoryPanel(recentMessages)
+
 		// Get user input
 		display.PrintPrompt()
 		query, err := terminal.ReadUserInput()
@@ -106,9 +96,18 @@ func main() {
 			break
 		}
 
-		// Check for exit command
+		// Handle commands
 		if query == "/exit" || query == "/quit" || query == "exit" || query == "quit" {
 			break
+		}
+		if query == "/clear" {
+			display.ClearScreen()
+			display.PrintWelcome(cfg.ModelName)
+			continue
+		}
+		if query == "/history" {
+			displayFullHistory(historyMgr, display)
+			continue
 		}
 
 		// Skip empty queries
@@ -116,13 +115,12 @@ func main() {
 			continue
 		}
 
-		// Save user message
-		userMsg := history.Message{
-			Role:      "user",
-			Content:   query,
-			Timestamp: time.Now(),
-		}
-		historyMgr.AddMessage(userMsg)
+		// Display user message with timestamp
+		now := time.Now()
+		display.PrintUserMessage(query, now)
+
+		// DON'T save user message yet - wait until after LLM response
+		// to avoid duplicate query in context
 
 		// Analyze query for search trigger
 		var searchContext string
@@ -143,27 +141,44 @@ func main() {
 		// Build messages with context
 		messages := buildMessages(historyMgr, query, searchContext)
 
-		// Stream response from Ollama
-		display.PrintAssistantPrefix()
-		response, err := ollamaClient.Chat(ctx, ollama.ChatRequest{
+		// Start assistant response
+		display.StartAssistantResponse()
+
+		// Stream response from Ollama with thinking support
+		thinking, answer, err := ollamaClient.ChatWithCallbacks(ctx, ollama.ChatRequest{
 			Model:    cfg.ModelName,
 			Messages: messages,
-		}, func(chunk string) {
-			display.WriteChunk(chunk)
+		}, ollama.StreamCallbacks{
+			OnThinking: func(chunk string) {
+				display.WriteThinking(chunk)
+			},
+			OnAnswer: func(chunk string) {
+				display.WriteAnswer(chunk)
+			},
+			OnDone: func() {
+				display.StartAnswer()
+			},
 		})
 
 		if err != nil {
-			display.WriteNewline()
 			display.PrintError(err)
 			continue
 		}
 
-		display.WriteNewline()
+		// End response with metadata
+		display.EndAssistantResponse(sourceURLs)
 
-		// Save assistant message
+		// NOW save both user and assistant messages to history
+		userMsg := history.Message{
+			Role:      "user",
+			Content:   query,
+			Timestamp: now,
+		}
+		historyMgr.AddMessage(userMsg)
+
 		assistantMsg := history.Message{
 			Role:      "assistant",
-			Content:   response,
+			Content:   answer,
 			Timestamp: time.Now(),
 		}
 
@@ -174,6 +189,12 @@ func main() {
 			}
 		}
 
+		// Store thinking separately if available (for future reference)
+		if thinking != "" && cfg.Verbose {
+			// Could save thinking to a separate field in future
+			_ = thinking
+		}
+
 		historyMgr.AddMessage(assistantMsg)
 	}
 
@@ -181,8 +202,8 @@ func main() {
 	display.PrintGoodbye()
 }
 
-// parseFlags parses command-line flags and returns a config
-func parseFlags() *config.Config {
+// parseFlags parses command-line flags with thinking option
+func parseFlags() (*config.Config, bool) {
 	cfg := config.NewConfig()
 
 	flag.StringVar(&cfg.ModelName, "model", cfg.ModelName, "Ollama model name")
@@ -192,33 +213,39 @@ func parseFlags() *config.Config {
 	flag.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "Enable verbose logging")
 	flag.IntVar(&cfg.MaxResults, "max-results", cfg.MaxResults, "Maximum search results to crawl")
 
+	// New flags
+	showThinking := flag.Bool("show-thinking", true, "Show model thinking process (default: true)")
+	hideThinking := flag.Bool("hide-thinking", false, "Hide model thinking process")
+	noSearch := flag.Bool("no-search", false, "Disable automatic web search")
+
 	flag.Parse()
 
-	// Handle --no-search flag
-	noSearch := flag.Bool("no-search", false, "Disable automatic web search")
 	if *noSearch {
 		cfg.AutoSearch = false
 	}
 
-	return cfg
+	// Hide thinking takes precedence if specified
+	if *hideThinking {
+		return cfg, false
+	}
+
+	return cfg, *showThinking
 }
 
 // checkModel verifies that the specified model exists
-func checkModel(client *ollama.Client, modelName string, display *terminal.Display) error {
+func checkModel(client *ollama.Client, modelName string, display *ui.EnhancedDisplay) error {
 	models, err := client.ListModels()
 	if err != nil {
 		display.PrintError(fmt.Errorf("failed to list models: %w", err))
 		return err
 	}
 
-	// Check if model exists
 	for _, m := range models {
 		if m == modelName {
 			return nil
 		}
 	}
 
-	// Model not found
 	display.PrintError(fmt.Errorf("model '%s' not found", modelName))
 	display.PrintInfo("Available models:")
 	for _, m := range models {
@@ -229,40 +256,30 @@ func checkModel(client *ollama.Client, modelName string, display *terminal.Displ
 	return fmt.Errorf("model not found")
 }
 
-// performSearch executes web search and crawling
-func performSearch(ctx context.Context, display *terminal.Display, searxngClient *searxng.Client, webCrawler *crawler.Crawler, query string, cfg *config.Config) (string, []string) {
-	// Show searching spinner
-	display.ShowSpinner("Searching the web...")
+// performSearch executes web search with enhanced display
+func performSearch(ctx context.Context, display *ui.EnhancedDisplay, searxngClient *searxng.Client, webCrawler *crawler.Crawler, query string, cfg *config.Config) (string, []string) {
+	display.PrintSearchActivity("Searching the web")
 
-	// Query SearXNG
 	results, err := searxngClient.Search(ctx, query, cfg.MaxResults)
 	if err != nil {
-		display.StopSpinner()
 		display.PrintWarning(fmt.Sprintf("Search failed: %v", err))
 		return "", nil
 	}
 
 	if len(results) == 0 {
-		display.StopSpinner()
 		display.PrintInfo("No search results found")
 		return "", nil
 	}
 
-	// Extract URLs
 	urls := make([]string, len(results))
 	for i, result := range results {
 		urls[i] = result.URL
 	}
 
-	// Update spinner for crawling
-	display.ShowSpinner(fmt.Sprintf("Crawling %d URLs...", len(urls)))
+	display.PrintSearchActivity(fmt.Sprintf("Crawling %d URLs", len(urls)))
 
-	// Crawl URLs
 	crawlResults := webCrawler.CrawlURLs(ctx, urls)
 
-	display.StopSpinner()
-
-	// Count successful crawls
 	successCount := 0
 	for _, result := range crawlResults {
 		if result.Error == nil {
@@ -271,12 +288,10 @@ func performSearch(ctx context.Context, display *terminal.Display, searxngClient
 	}
 
 	if successCount > 0 {
-		display.PrintSearchSources(successCount)
+		display.PrintSuccess(fmt.Sprintf("Gathered information from %d sources", successCount))
 	}
 
-	// Build context
 	searchContext := buildSearchContext(crawlResults)
-
 	return searchContext, urls
 }
 
@@ -351,4 +366,34 @@ func buildMessages(historyMgr *history.Manager, currentQuery string, searchConte
 	})
 
 	return messages
+}
+
+// displayFullHistory shows all conversation history
+func displayFullHistory(historyMgr *history.Manager, display *ui.EnhancedDisplay) {
+	session := historyMgr.GetCurrentSession()
+	if session == nil || len(session.Messages) == 0 {
+		display.PrintInfo("No conversation history yet")
+		return
+	}
+
+	display.PrintSeparator()
+	fmt.Println("Full Conversation History")
+	display.PrintSeparator()
+
+	for _, msg := range session.Messages {
+		timestamp := msg.Timestamp.Format("15:04:05")
+		if msg.Role == "user" {
+			fmt.Printf("\n[%s] You:\n%s\n", timestamp, msg.Content)
+		} else {
+			fmt.Printf("\n[%s] Assistant:\n%s\n", timestamp, msg.Content)
+			if msg.Metadata != nil && len(msg.Metadata.SourceURLs) > 0 {
+				fmt.Println("Sources:")
+				for _, url := range msg.Metadata.SourceURLs {
+					fmt.Printf("  - %s\n", url)
+				}
+			}
+		}
+	}
+
+	display.PrintSeparator()
 }
