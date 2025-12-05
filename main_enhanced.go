@@ -119,13 +119,8 @@ func mainEnhanced() {
 		now := time.Now()
 		display.PrintUserMessage(query, now)
 
-		// Save user message
-		userMsg := history.Message{
-			Role:      "user",
-			Content:   query,
-			Timestamp: now,
-		}
-		historyMgr.AddMessage(userMsg)
+		// DON'T save user message yet - wait until after LLM response
+		// to avoid duplicate query in context
 
 		// Analyze query for search trigger
 		var searchContext string
@@ -173,7 +168,14 @@ func mainEnhanced() {
 		// End response with metadata
 		display.EndAssistantResponse(sourceURLs)
 
-		// Save assistant message (answer only, not thinking)
+		// NOW save both user and assistant messages to history
+		userMsg := history.Message{
+			Role:      "user",
+			Content:   query,
+			Timestamp: now,
+		}
+		historyMgr.AddMessage(userMsg)
+
 		assistantMsg := history.Message{
 			Role:      "assistant",
 			Content:   answer,
@@ -212,13 +214,19 @@ func parseFlagsEnhanced() (*config.Config, bool) {
 	flag.IntVar(&cfg.MaxResults, "max-results", cfg.MaxResults, "Maximum search results to crawl")
 
 	// New flags
-	showThinking := flag.Bool("show-thinking", false, "Show model thinking process (for reasoning models)")
+	showThinking := flag.Bool("show-thinking", true, "Show model thinking process (default: true)")
+	hideThinking := flag.Bool("hide-thinking", false, "Hide model thinking process")
 	noSearch := flag.Bool("no-search", false, "Disable automatic web search")
 
 	flag.Parse()
 
 	if *noSearch {
 		cfg.AutoSearch = false
+	}
+
+	// Hide thinking takes precedence if specified
+	if *hideThinking {
+		return cfg, false
 	}
 
 	return cfg, *showThinking

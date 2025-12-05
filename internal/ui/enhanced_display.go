@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/glamour"
 	"web-ollama/internal/history"
 )
 
@@ -20,16 +21,25 @@ type EnhancedDisplay struct {
 	responseBuffer strings.Builder
 	startTime      time.Time
 	tokenCount     int
+	renderer       *glamour.TermRenderer
 }
 
 // NewEnhancedDisplay creates a new enhanced display
 func NewEnhancedDisplay(showThinking bool) *EnhancedDisplay {
 	width, height := getTerminalSize()
+
+	// Create markdown renderer
+	renderer, _ := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width-10),
+	)
+
 	return &EnhancedDisplay{
 		width:        width,
 		height:       height,
 		historyWidth: width / 3, // Left 1/3 for history
 		showThinking: showThinking,
+		renderer:     renderer,
 	}
 }
 
@@ -116,16 +126,32 @@ func (d *EnhancedDisplay) StartAnswer() {
 	fmt.Printf("%s│%s ", colorGray, colorReset)
 }
 
-// WriteAnswer writes answer tokens
+// WriteAnswer writes answer tokens (streams live, renders markdown at end)
 func (d *EnhancedDisplay) WriteAnswer(text string) {
 	d.responseBuffer.WriteString(text)
 	d.tokenCount += len(strings.Fields(text))
+	// Stream raw text in real-time for better UX
 	fmt.Print(text)
 }
 
 // EndAssistantResponse finishes response and shows metadata
 func (d *EnhancedDisplay) EndAssistantResponse(sourceURLs []string) {
 	duration := time.Since(d.startTime)
+
+	fmt.Println()
+	fmt.Println()
+
+	// Render the complete response as markdown for final display
+	if d.responseBuffer.Len() > 0 && d.renderer != nil {
+		fmt.Printf("%s│ Rendered:%s\n", colorGray, colorReset)
+		rendered, err := d.renderer.Render(d.responseBuffer.String())
+		if err == nil {
+			// Indent each line
+			for _, line := range strings.Split(strings.TrimRight(rendered, "\n"), "\n") {
+				fmt.Printf("%s│%s %s\n", colorGray, colorReset, line)
+			}
+		}
+	}
 
 	fmt.Println()
 
