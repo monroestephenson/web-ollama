@@ -9,8 +9,9 @@ type ChatRequest struct {
 
 // Message represents a chat message
 type Message struct {
-	Role    string `json:"role"`    // "user", "assistant", or "system"
-	Content string `json:"content"`
+	Role     string `json:"role"`    // "user", "assistant", or "system"
+	Content  string `json:"content"`
+	Thinking string `json:"thinking"` // For reasoning models like deepseek-r1
 }
 
 // ChatResponse represents a streaming response chunk from Ollama

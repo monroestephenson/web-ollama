@@ -4,13 +4,23 @@ A Go-based CLI tool that combines local Ollama LLM models with SearXNG web searc
 
 ## Features
 
+### Core Features
 - 🤖 **Local LLM Integration**: Uses your local Ollama instance for privacy and speed
 - 🔍 **Smart Web Search**: Auto-detects when queries need web search (via local SearXNG)
 - 🕷️ **Parallel Web Crawling**: Fetches and extracts text from top 5 search results
 - ⚡ **Real-time Streaming**: See LLM responses as they're generated
 - 💾 **Conversation History**: Persists conversations across sessions
-- 🎨 **Beautiful Terminal UI**: Colorized output with spinners and progress indicators
 - 🔧 **Configurable**: CLI flags for model selection, URLs, and behavior
+
+### ✨ NEW: Enhanced UI Features
+- 🎨 **Beautiful Chat Interface**: Box-drawn UI with message history panel
+- 🧠 **Thinking Display**: Watch reasoning models think through problems (deepseek-r1, etc.)
+- ⏱️ **Response Metrics**: See timing, word count, and sources for each response
+- 📚 **Clear Source Citations**: Web sources displayed prominently
+- 🎯 **Interactive Commands**: `/exit`, `/clear`, `/history` commands
+- 📊 **Conversation Panel**: See your recent chat history at a glance
+
+> **Note**: The enhanced UI is now **enabled by default**! See [FEATURES.md](FEATURES.md) for details.
 
 ## Architecture
 
