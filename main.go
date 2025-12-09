@@ -80,6 +80,12 @@ func main() {
 	go func() {
 		<-sigChan
 		display.PrintInfo("\nShutting down gracefully...")
+		display.PrintInfo("Stopping model to free up RAM...")
+		if err := ollamaClient.StopModel(cfg.ModelName); err != nil {
+			display.PrintWarning(fmt.Sprintf("Failed to stop model: %v", err))
+		} else {
+			display.PrintSuccess("Model stopped successfully")
+		}
 		cancel()
 		os.Exit(0)
 	}()
@@ -284,6 +290,12 @@ func main() {
 		}
 
 		historyMgr.AddMessage(assistantMsg)
+	}
+
+	// Stop the model before exiting
+	display.PrintInfo("Stopping model to free up RAM...")
+	if err := ollamaClient.StopModel(cfg.ModelName); err != nil {
+		display.PrintWarning(fmt.Sprintf("Failed to stop model: %v", err))
 	}
 
 	// Print goodbye message
