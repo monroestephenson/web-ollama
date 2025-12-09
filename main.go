@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -111,6 +113,14 @@ func main() {
 			displayFullHistory(historyMgr, display)
 			continue
 		}
+		if query == "/files" {
+			workingDir, _ := os.Getwd()
+			if workingDir == "" {
+				workingDir = "."
+			}
+			displayAvailableFiles(workingDir, display)
+			continue
+		}
 
 		// Skip empty queries
 		if strings.TrimSpace(query) == "" {
@@ -124,13 +134,69 @@ func main() {
 		// DON'T save user message yet - wait until after LLM response
 		// to avoid duplicate query in context
 
+		// Extract and read file references from query
+		fileRefs := extractFileReferences(query)
+		var fileReferences []FileReference
+		var fileContext string
+
+		if len(fileRefs) > 0 {
+			workingDir, err := os.Getwd()
+			if err != nil {
+				display.PrintWarning(fmt.Sprintf("Failed to get working directory: %v", err))
+				workingDir = "."
+			}
+
+			fileReferences = readFileReferences(fileRefs, workingDir)
+			fileContext = buildFileContext(fileReferences)
+
+			// Display which files were loaded
+			successCount := 0
+			for _, ref := range fileReferences {
+				if ref.Error == nil {
+					successCount++
+				}
+			}
+
+			if successCount > 0 {
+				display.PrintSuccess(fmt.Sprintf("Loaded %d file(s): %s", successCount, strings.Join(fileRefs, ", ")))
+				if cfg.Verbose {
+					display.PrintInfo(fmt.Sprintf("File context size: %d characters", len(fileContext)))
+				}
+			}
+
+			// Display errors for failed file loads with suggestions
+			for _, ref := range fileReferences {
+				if ref.Error != nil {
+					display.PrintWarning(fmt.Sprintf("Failed to load @%s: %v", ref.Path, ref.Error))
+
+					// Show suggestions for similar files
+					matches := terminal.FindMatchingFiles(workingDir, ref.Path)
+					if len(matches) > 0 {
+						fmt.Printf("   💡 Did you mean:\n")
+						for i, match := range matches {
+							if i < 5 { // Show max 5 suggestions
+								fmt.Printf("      @%s\n", match)
+							}
+						}
+					}
+				}
+			}
+		}
+
 		// Analyze query for search trigger using LLM
 		var searchContext string
 		var sourceURLs []string
 
 		if cfg.AutoSearch {
+			// Strip file references from query before search analysis
+			// to avoid confusing @filename with @username mentions
+			queryForAnalysis := query
+			for _, ref := range fileRefs {
+				queryForAnalysis = strings.ReplaceAll(queryForAnalysis, "@"+ref, ref)
+			}
+
 			display.PrintInfo("Analyzing query...")
-			decision, err := llmAnalyzer.AnalyzeWithLLM(ctx, query)
+			decision, err := llmAnalyzer.AnalyzeWithLLM(ctx, queryForAnalysis)
 			if err != nil {
 				display.PrintWarning(fmt.Sprintf("Analysis failed: %v", err))
 			} else {
@@ -155,7 +221,10 @@ func main() {
 		}
 
 		// Build messages with context
-		messages := buildMessages(historyMgr, query, searchContext)
+		if cfg.Verbose && fileContext != "" {
+			display.PrintInfo(fmt.Sprintf("Sending %d chars of file context to LLM", len(fileContext)))
+		}
+		messages := buildMessages(historyMgr, query, searchContext, fileContext)
 
 		// Start assistant response
 		display.StartAssistantResponse()
@@ -164,6 +233,9 @@ func main() {
 		thinking, answer, err := ollamaClient.ChatWithCallbacks(ctx, ollama.ChatRequest{
 			Model:    cfg.ModelName,
 			Messages: messages,
+			Options: map[string]interface{}{
+				"num_ctx": 32768, // Set context window to 32K tokens (enough for file references)
+			},
 		}, ollama.StreamCallbacks{
 			OnThinking: func(chunk string) {
 				display.WriteThinking(chunk)
@@ -229,12 +301,18 @@ func parseFlags() (*config.Config, bool) {
 	flag.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "Enable verbose logging")
 	flag.IntVar(&cfg.MaxResults, "max-results", cfg.MaxResults, "Maximum search results to crawl")
 
+	// Timeout flag (in seconds)
+	timeoutSeconds := flag.Int("timeout", 600, "Ollama request timeout in seconds (default: 600)")
+
 	// New flags
 	showThinking := flag.Bool("show-thinking", true, "Show model thinking process (default: true)")
 	hideThinking := flag.Bool("hide-thinking", false, "Hide model thinking process")
 	noSearch := flag.Bool("no-search", false, "Disable automatic web search")
 
 	flag.Parse()
+
+	// Apply timeout
+	cfg.OllamaTimeout = time.Duration(*timeoutSeconds) * time.Second
 
 	if *noSearch {
 		cfg.AutoSearch = false
@@ -406,7 +484,7 @@ func buildSearchContext(results []crawler.CrawlResult) string {
 }
 
 // buildMessages constructs the message array for Ollama
-func buildMessages(historyMgr *history.Manager, currentQuery string, searchContext string) []ollama.Message {
+func buildMessages(historyMgr *history.Manager, currentQuery string, searchContext string, fileContext string) []ollama.Message {
 	messages := []ollama.Message{}
 
 	// Add system message
@@ -414,11 +492,16 @@ func buildMessages(historyMgr *history.Manager, currentQuery string, searchConte
 	if searchContext != "" {
 		systemPrompt += " You have access to current web information to answer questions accurately. Cite sources when referencing specific information."
 	}
+	if fileContext != "" {
+		systemPrompt += " The user has provided file contents that you MUST read and analyze carefully. Base your answer on the ACTUAL contents of the files provided, not on assumptions or general knowledge."
+	}
 
 	messages = append(messages, ollama.Message{
 		Role:    "system",
 		Content: systemPrompt,
 	})
+
+	// File context will be prepended to the current query instead of being a separate message
 
 	// Add search context if available
 	if searchContext != "" {
@@ -441,10 +524,17 @@ func buildMessages(historyMgr *history.Manager, currentQuery string, searchConte
 		})
 	}
 
-	// Add current query
+	// Add current query (with file context prepended if available)
+	finalQuery := currentQuery
+	if fileContext != "" {
+		// Prepend file contents directly to the query for better context
+		finalQuery = fileContext + "\n\n" + currentQuery
+		// Debug output would go here but we can't print from this function
+	}
+
 	messages = append(messages, ollama.Message{
 		Role:    "user",
-		Content: currentQuery,
+		Content: finalQuery,
 	})
 
 	return messages
@@ -478,4 +568,115 @@ func displayFullHistory(historyMgr *history.Manager, display *ui.EnhancedDisplay
 	}
 
 	display.PrintSeparator()
+}
+
+// displayAvailableFiles shows all files that can be referenced with @
+func displayAvailableFiles(workingDir string, display *ui.EnhancedDisplay) {
+	display.PrintSeparator()
+	fmt.Println("Available Files for @ Reference")
+	display.PrintSeparator()
+
+	matches := terminal.FindMatchingFiles(workingDir, "")
+	if len(matches) == 0 {
+		display.PrintInfo("No files found in current directory")
+		return
+	}
+
+	fmt.Printf("\nFound %d files:\n\n", len(matches))
+	for _, match := range matches {
+		fmt.Printf("  @%s\n", match)
+	}
+	fmt.Println()
+	display.PrintInfo("Usage: Include @filename in your query to reference a file")
+	display.PrintInfo("Example: What does @main.go do?")
+	display.PrintSeparator()
+}
+
+// FileReference represents a file mentioned in the query
+type FileReference struct {
+	Path    string
+	Content string
+	Error   error
+}
+
+// extractFileReferences finds all @filename mentions in the query
+func extractFileReferences(query string) []string {
+	// Match @filename or @path/to/filename pattern
+	// Supports: @file.txt, @src/main.go, @"file with spaces.txt"
+	re := regexp.MustCompile(`@"([^"]+)"|@([^\s]+)`)
+	matches := re.FindAllStringSubmatch(query, -1)
+
+	files := []string{}
+	seen := make(map[string]bool)
+
+	for _, match := range matches {
+		var filename string
+		if match[1] != "" {
+			// Quoted filename (for files with spaces)
+			filename = match[1]
+		} else {
+			// Unquoted filename
+			filename = match[2]
+		}
+
+		if !seen[filename] {
+			files = append(files, filename)
+			seen[filename] = true
+		}
+	}
+
+	return files
+}
+
+// readFileReferences reads the content of referenced files
+func readFileReferences(files []string, workingDir string) []FileReference {
+	references := make([]FileReference, 0, len(files))
+
+	for _, file := range files {
+		ref := FileReference{Path: file}
+
+		// Resolve relative paths from working directory
+		fullPath := file
+		if !filepath.IsAbs(file) {
+			fullPath = filepath.Join(workingDir, file)
+		}
+
+		// Read file content
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			ref.Error = err
+		} else {
+			ref.Content = string(content)
+		}
+
+		references = append(references, ref)
+	}
+
+	return references
+}
+
+// buildFileContext formats file references for LLM
+func buildFileContext(references []FileReference) string {
+	if len(references) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("=== FILE CONTENTS FOR ANALYSIS ===\n\n")
+
+	for _, ref := range references {
+		if ref.Error != nil {
+			sb.WriteString(fmt.Sprintf("File: %s - Error: %v\n\n", ref.Path, ref.Error))
+			continue
+		}
+
+		sb.WriteString(fmt.Sprintf("File path: %s\n", ref.Path))
+		sb.WriteString("--- BEGIN FILE CONTENTS ---\n")
+		sb.WriteString(ref.Content)
+		sb.WriteString("\n--- END FILE CONTENTS ---\n\n")
+	}
+
+	sb.WriteString("=== END OF FILE CONTENTS ===\n\n")
+	sb.WriteString("Please analyze the above file contents carefully and answer the user's question based on what you see in the actual file.\n\n")
+	return sb.String()
 }

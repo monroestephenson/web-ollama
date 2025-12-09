@@ -72,7 +72,8 @@ func (d *EnhancedDisplay) PrintWelcome(modelName string) {
 	fmt.Printf("%s%s║                                                          ║%s\n", colorBold, colorCyan, colorReset)
 	fmt.Printf("%s%s╚══════════════════════════════════════════════════════════╝%s\n", colorBold, colorCyan, colorReset)
 	fmt.Printf("\n%s%sModel:%s %s\n", colorBold, colorGray, colorReset, modelName)
-	fmt.Printf("%sCommands:%s /exit (quit) | /clear (clear screen) | /history (show all)\n", colorGray, colorReset)
+	fmt.Printf("%sCommands:%s /exit | /clear | /history | /files (list files for @reference)\n", colorGray, colorReset)
+	fmt.Printf("%sFile Reference:%s Use @filename in queries (e.g., \"What does @main.go do?\")\n", colorGray, colorReset)
 	fmt.Println()
 }
 

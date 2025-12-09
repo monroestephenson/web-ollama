@@ -38,7 +38,7 @@ func NewConfig() *Config {
 		// Ollama defaults
 		OllamaURL:     "http://localhost:11434",
 		ModelName:     "deepseek-r1:8b",
-		OllamaTimeout: 120 * time.Second,
+		OllamaTimeout: 600 * time.Second, // 10 minutes for large contexts
 
 		// SearXNG defaults
 		SearXNGURL:    "http://localhost:9090",

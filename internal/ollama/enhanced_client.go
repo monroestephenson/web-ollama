@@ -39,8 +39,8 @@ func (c *Client) ChatWithCallbacks(ctx context.Context, req ChatRequest, callbac
 	// Set headers
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	// Execute request
-	resp, err := c.httpClient.Do(httpReq)
+	// Execute request with streaming client (no timeout)
+	resp, err := c.streamingClient.Do(httpReq)
 	if err != nil {
 		return "", "", fmt.Errorf("request failed: %w", err)
 	}

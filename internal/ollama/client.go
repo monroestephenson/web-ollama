@@ -14,17 +14,23 @@ import (
 
 // Client handles communication with Ollama
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
-	timeout    time.Duration
+	baseURL          string
+	httpClient       *http.Client
+	streamingClient  *http.Client
+	timeout          time.Duration
 }
 
 // NewClient creates a new Ollama client
 func NewClient(baseURL string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL: baseURL,
+		// Regular client with timeout for non-streaming requests
 		httpClient: &http.Client{
 			Timeout: timeout,
+		},
+		// Streaming client with no timeout (context handles cancellation)
+		streamingClient: &http.Client{
+			Timeout: 0, // No timeout for streaming
 		},
 		timeout: timeout,
 	}
@@ -107,8 +113,8 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest, onChunk func(string)
 	// Set headers
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	// Execute request
-	resp, err := c.httpClient.Do(httpReq)
+	// Execute request with streaming client (no timeout)
+	resp, err := c.streamingClient.Do(httpReq)
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
