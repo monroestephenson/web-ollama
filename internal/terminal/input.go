@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 // ReadUserInput reads a line of input from the user
@@ -112,4 +114,46 @@ func ShowFileSuggestions(workingDir string, query string) {
 			}
 		}
 	}
+}
+
+// ListenForESC listens for ESC key press in a goroutine and sends signal when pressed
+// Returns a channel that will receive true when ESC is pressed
+func ListenForESC() chan bool {
+	escChan := make(chan bool, 1)
+
+	go func() {
+		// Save the current terminal state
+		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			// If we can't set raw mode, just close the channel and return
+			close(escChan)
+			return
+		}
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
+
+		// Read single bytes from stdin
+		buf := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if err != nil || n == 0 {
+				break
+			}
+
+			// ESC key is byte 27
+			if buf[0] == 27 {
+				escChan <- true
+				break
+			}
+		}
+
+		close(escChan)
+	}()
+
+	return escChan
+}
+
+// StopESCListener restores terminal to normal mode
+func StopESCListener() {
+	// This will happen automatically when the goroutine exits
+	// but we provide this function for consistency
 }

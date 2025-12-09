@@ -6,6 +6,7 @@ require (
 	github.com/charmbracelet/glamour v0.6.0
 	github.com/google/uuid v1.5.0
 	golang.org/x/net v0.19.0
+	golang.org/x/term v0.15.0
 )
 
 require (

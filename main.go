@@ -235,8 +235,21 @@ func main() {
 		// Start assistant response
 		display.StartAssistantResponse()
 
+		// Create a cancellable context for this streaming request
+		streamCtx, streamCancel := context.WithCancel(ctx)
+
+		// Start ESC key listener
+		escChan := terminal.ListenForESC()
+
+		// Watch for ESC key press
+		go func() {
+			<-escChan
+			display.PrintWarning("\n\n[Response stopped by user - press ESC]")
+			streamCancel()
+		}()
+
 		// Stream response from Ollama with thinking support
-		thinking, answer, err := ollamaClient.ChatWithCallbacks(ctx, ollama.ChatRequest{
+		thinking, answer, err := ollamaClient.ChatWithCallbacks(streamCtx, ollama.ChatRequest{
 			Model:    cfg.ModelName,
 			Messages: messages,
 			Options: map[string]interface{}{
@@ -254,7 +267,15 @@ func main() {
 			},
 		})
 
+		// Clean up the stream context
+		streamCancel()
+
 		if err != nil {
+			// Check if error was due to user cancellation
+			if streamCtx.Err() == context.Canceled {
+				display.PrintInfo("Response stopped. You can ask a new question.")
+				continue
+			}
 			display.PrintError(err)
 			continue
 		}
@@ -262,34 +283,38 @@ func main() {
 		// End response with metadata
 		display.EndAssistantResponse(sourceURLs)
 
-		// NOW save both user and assistant messages to history
-		userMsg := history.Message{
-			Role:      "user",
-			Content:   query,
-			Timestamp: now,
-		}
-		historyMgr.AddMessage(userMsg)
-
-		assistantMsg := history.Message{
-			Role:      "assistant",
-			Content:   answer,
-			Timestamp: time.Now(),
-		}
-
-		if len(sourceURLs) > 0 {
-			assistantMsg.Metadata = &history.Metadata{
-				SearchPerformed: true,
-				SourceURLs:      sourceURLs,
+		// Only save to history if we got a complete response
+		// (not cancelled by user)
+		if streamCtx.Err() != context.Canceled {
+			// NOW save both user and assistant messages to history
+			userMsg := history.Message{
+				Role:      "user",
+				Content:   query,
+				Timestamp: now,
 			}
-		}
+			historyMgr.AddMessage(userMsg)
 
-		// Store thinking separately if available (for future reference)
-		if thinking != "" && cfg.Verbose {
-			// Could save thinking to a separate field in future
-			_ = thinking
-		}
+			assistantMsg := history.Message{
+				Role:      "assistant",
+				Content:   answer,
+				Timestamp: time.Now(),
+			}
 
-		historyMgr.AddMessage(assistantMsg)
+			if len(sourceURLs) > 0 {
+				assistantMsg.Metadata = &history.Metadata{
+					SearchPerformed: true,
+					SourceURLs:      sourceURLs,
+				}
+			}
+
+			// Store thinking separately if available (for future reference)
+			if thinking != "" && cfg.Verbose {
+				// Could save thinking to a separate field in future
+				_ = thinking
+			}
+
+			historyMgr.AddMessage(assistantMsg)
+		}
 	}
 
 	// Stop the model before exiting
