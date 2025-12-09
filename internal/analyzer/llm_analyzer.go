@@ -27,9 +27,9 @@ type OllamaMessage struct {
 
 // SearchDecision represents the LLM's decision
 type SearchDecision struct {
-	NeedsSearch  bool   `json:"needs_search"`
-	SearchQuery  string `json:"search_query,omitempty"`
-	Reason       string `json:"reason"`
+	NeedsSearch   bool     `json:"needs_search"`
+	SearchQueries []string `json:"search_queries,omitempty"` // Support multiple searches
+	Reason        string   `json:"reason"`
 }
 
 // NewLLMAnalyzer creates a new LLM-based analyzer
@@ -49,14 +49,15 @@ User query: "%s"
 Decide if this query needs current web information. Respond ONLY with valid JSON in this exact format:
 {
   "needs_search": true/false,
-  "search_query": "optimized search query if needed",
+  "search_queries": ["query 1", "query 2"],
   "reason": "brief reason"
 }
 
 Guidelines:
 - needs_search=true for: current events, recent news, prices, weather, facts that change
 - needs_search=false for: coding help, explanations, math, creative writing, general knowledge
-- If needs_search=true, provide an optimized search_query (concise, 2-5 words)
+- If needs_search=true, provide search_queries as an array (each query: concise, 2-5 words)
+- You can provide multiple queries to gather comprehensive information (e.g., "iPhone 16 specs" and "Samsung S24 specs" for comparison)
 - Keep reason under 10 words
 
 Respond with JSON only, no other text.`, userQuery)

@@ -135,15 +135,19 @@ func main() {
 				display.PrintWarning(fmt.Sprintf("Analysis failed: %v", err))
 			} else {
 				if decision.NeedsSearch {
-					// Use the LLM's optimized search query
-					searchQuery := decision.SearchQuery
-					if searchQuery == "" {
-						searchQuery = query // Fallback to original
+					// Use the LLM's optimized search queries
+					searchQueries := decision.SearchQueries
+					if len(searchQueries) == 0 {
+						searchQueries = []string{query} // Fallback to original
 					}
 					if cfg.Verbose {
-						display.PrintInfo(fmt.Sprintf("Search query: \"%s\" (Reason: %s)", searchQuery, decision.Reason))
+						if len(searchQueries) == 1 {
+							display.PrintInfo(fmt.Sprintf("Search query: \"%s\" (Reason: %s)", searchQueries[0], decision.Reason))
+						} else {
+							display.PrintInfo(fmt.Sprintf("Search queries: %v (Reason: %s)", searchQueries, decision.Reason))
+						}
 					}
-					searchContext, sourceURLs = performSearch(ctx, display, searxngClient, webCrawler, searchQuery, cfg)
+					searchContext, sourceURLs = performMultiSearch(ctx, display, searxngClient, webCrawler, searchQueries, cfg)
 				} else if cfg.Verbose {
 					display.PrintInfo(fmt.Sprintf("No search needed: %s", decision.Reason))
 				}
@@ -305,6 +309,72 @@ func performSearch(ctx context.Context, display *ui.EnhancedDisplay, searxngClie
 
 	searchContext := buildSearchContext(crawlResults)
 	return searchContext, urls
+}
+
+// performMultiSearch executes multiple web searches and aggregates results
+func performMultiSearch(ctx context.Context, display *ui.EnhancedDisplay, searxngClient *searxng.Client, webCrawler *crawler.Crawler, queries []string, cfg *config.Config) (string, []string) {
+	if len(queries) == 1 {
+		return performSearch(ctx, display, searxngClient, webCrawler, queries[0], cfg)
+	}
+
+	display.PrintSearchActivity(fmt.Sprintf("Performing %d web searches", len(queries)))
+
+	allCrawlResults := []crawler.CrawlResult{}
+	allURLs := []string{}
+	seenURLs := make(map[string]bool)
+
+	// Perform each search
+	for i, query := range queries {
+		if cfg.Verbose {
+			display.PrintSearchActivity(fmt.Sprintf("Search %d/%d: \"%s\"", i+1, len(queries), query))
+		}
+
+		results, err := searxngClient.Search(ctx, query, cfg.MaxResults)
+		if err != nil {
+			display.PrintWarning(fmt.Sprintf("Search %d failed: %v", i+1, err))
+			continue
+		}
+
+		if len(results) == 0 {
+			if cfg.Verbose {
+				display.PrintInfo(fmt.Sprintf("Search %d: No results found", i+1))
+			}
+			continue
+		}
+
+		// Collect unique URLs
+		urls := []string{}
+		for _, result := range results {
+			if !seenURLs[result.URL] {
+				urls = append(urls, result.URL)
+				seenURLs[result.URL] = true
+				allURLs = append(allURLs, result.URL)
+			}
+		}
+
+		if len(urls) > 0 {
+			// Crawl URLs for this search
+			crawlResults := webCrawler.CrawlURLs(ctx, urls)
+			allCrawlResults = append(allCrawlResults, crawlResults...)
+		}
+	}
+
+	// Count successful crawls
+	successCount := 0
+	for _, result := range allCrawlResults {
+		if result.Error == nil {
+			successCount++
+		}
+	}
+
+	if successCount > 0 {
+		display.PrintSuccess(fmt.Sprintf("Gathered information from %d sources across %d searches", successCount, len(queries)))
+	} else {
+		display.PrintWarning("No information gathered from searches")
+	}
+
+	searchContext := buildSearchContext(allCrawlResults)
+	return searchContext, allURLs
 }
 
 // buildSearchContext formats crawled content for LLM
