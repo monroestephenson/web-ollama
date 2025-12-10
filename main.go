@@ -175,7 +175,6 @@ func main() {
 				display.StartAnswer()
 			},
 		})
-
 		if err != nil {
 			display.PrintError(err)
 			continue
@@ -229,12 +228,23 @@ func parseFlags() (*config.Config, bool) {
 	flag.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "Enable verbose logging")
 	flag.IntVar(&cfg.MaxResults, "max-results", cfg.MaxResults, "Maximum search results to crawl")
 
-	// New flags
+	timeoutSeconds := flag.Int("timeout", 600, "Ollama request timeout in seconds (default: 600)")
+
+	useCloud := flag.Bool("cloud", false, "Use gpt-oss:120b-cloud model")
 	showThinking := flag.Bool("show-thinking", true, "Show model thinking process (default: true)")
 	hideThinking := flag.Bool("hide-thinking", false, "Hide model thinking process")
 	noSearch := flag.Bool("no-search", false, "Disable automatic web search")
 
 	flag.Parse()
+
+	cfg.OllamaTimeout = time.Duration(*timeoutSeconds) * time.Second
+
+	if *useCloud {
+		cfg.ModelName = "gpt-oss:120b-cloud"
+	}
+
+	// Apply timeout
+	cfg.OllamaTimeout = time.Duration(*timeoutSeconds) * time.Second
 
 	if *noSearch {
 		cfg.AutoSearch = false
