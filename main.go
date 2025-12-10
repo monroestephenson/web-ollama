@@ -78,6 +78,17 @@ func main() {
 	go func() {
 		<-sigChan
 		display.PrintInfo("\nShutting down gracefully...")
+		
+		// Stop the model to free memory
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		
+		if err := ollamaClient.StopModel(stopCtx, cfg.ModelName); err != nil {
+			display.PrintWarning(fmt.Sprintf("Failed to stop model: %v", err))
+		} else {
+			display.PrintInfo(fmt.Sprintf("Stopped model: %s", cfg.ModelName))
+		}
+		
 		cancel()
 		os.Exit(0)
 	}()
@@ -100,6 +111,14 @@ func main() {
 
 		// Handle commands
 		if query == "/exit" || query == "/quit" || query == "exit" || query == "quit" {
+			// Stop the model before exiting
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := ollamaClient.StopModel(stopCtx, cfg.ModelName); err != nil {
+				display.PrintWarning(fmt.Sprintf("Failed to stop model: %v", err))
+			} else {
+				display.PrintInfo(fmt.Sprintf("Stopped model: %s", cfg.ModelName))
+			}
+			stopCancel()
 			break
 		}
 		if query == "/clear" {

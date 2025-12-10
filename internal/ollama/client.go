@@ -231,3 +231,37 @@ func (c *Client) ListModels() ([]string, error) {
 
 	return models, nil
 }
+
+// StopModel unloads a model from memory
+func (c *Client) StopModel(ctx context.Context, modelName string) error {
+	reqBody := map[string]interface{}{
+		"model":      modelName,
+		"keep_alive": 0,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/generate", c.baseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Ollama returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
