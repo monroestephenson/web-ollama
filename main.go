@@ -341,12 +341,18 @@ func parseFlags() (*config.Config, bool) {
 	// Timeout flag (in seconds)
 	timeoutSeconds := flag.Int("timeout", 600, "Ollama request timeout in seconds (default: 600)")
 
-	// New flags
+	// Model selection flags
+	useCloud := flag.Bool("cloud", false, "Use gpt-oss:120b-cloud model")
 	showThinking := flag.Bool("show-thinking", true, "Show model thinking process (default: true)")
 	hideThinking := flag.Bool("hide-thinking", false, "Hide model thinking process")
 	noSearch := flag.Bool("no-search", false, "Disable automatic web search")
 
 	flag.Parse()
+
+	// Apply cloud model if requested
+	if *useCloud {
+		cfg.ModelName = "gpt-oss:120b-cloud"
+	}
 
 	// Apply timeout
 	cfg.OllamaTimeout = time.Duration(*timeoutSeconds) * time.Second
